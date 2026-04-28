@@ -659,8 +659,8 @@ if executar or (st.session_state.resultados is not None and
 
         st.dataframe(
             df_rank.style
-                .applymap(colorir_rec, subset=['Recomendação'])
-                .applymap(colorir_score, subset=['Score Final'])
+                .map(colorir_rec, subset=['Recomendação'])
+                .map(colorir_score, subset=['Score Final'])
                 .format({'Score Final': '{:.1f}', 'Mercado': '{:.1f}', 'KPIs': '{:.1f}',
                          'NLP': '{:.1f}', 'Valuation': '{:.1f}'}),
             use_container_width=True, height=300,
