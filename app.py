@@ -141,6 +141,22 @@ VOCAB_QUALITY = {
     'oportunidade','estrategia','melhora','sustentavel','dividendo','record',
 }
 
+# ─── Cache de info do Yahoo (evita rate limit) ───────────────────────────────
+import time
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_ticker_info(ticker: str) -> dict:
+    """Busca yf.Ticker.info com retry exponencial — evita rate limit."""
+    for tentativa in range(4):
+        try:
+            info = yf.Ticker(ticker).info
+            if info and len(info) > 5:
+                return info
+        except Exception:
+            pass
+        time.sleep(2 ** tentativa)   # 1s → 2s → 4s → 8s
+    return {}
+
 # ─── Funções auxiliares ───────────────────────────────────────────────────────
 def safe_div(a, b):
     if b == 0 or pd.isna(b) or pd.isna(a):
@@ -229,7 +245,7 @@ def fase1_mercado(ticker: str, data_inicio: str, data_fim: str) -> dict:
 def fase3_kpis_sinteticos(ticker: str) -> dict:
     """Fase 3: KPIs sintéticos via Yahoo Finance Info (substitui CVM para UI)."""
     try:
-        info = yf.Ticker(ticker).info
+        info = get_ticker_info(ticker)
         if not info:
             return {'erro': 'Sem dados fundamentalistas'}
 
@@ -265,8 +281,7 @@ def fase3_kpis_sinteticos(ticker: str) -> dict:
 def fase4_nlp_sintetico(ticker: str) -> dict:
     """Fase 4: NLP simplificado — simula score textual via dados do Yahoo."""
     try:
-        t    = yf.Ticker(ticker)
-        info = t.info
+        info = get_ticker_info(ticker)
         # Usa longBusinessSummary como proxy do texto corporativo
         texto = info.get('longBusinessSummary', '')
         tokens = tokenizar(texto)
@@ -288,7 +303,7 @@ def fase4_nlp_sintetico(ticker: str) -> dict:
 def fase5_ml_score(ticker: str, score_mercado: float, score_kpi: float) -> dict:
     """Fase 5: Score ML sintético combinando features disponíveis."""
     try:
-        info = yf.Ticker(ticker).info
+        info = get_ticker_info(ticker)
         beta     = info.get('beta', 1.0) or 1.0
         eps_fwd  = info.get('forwardEps', 0.0) or 0.0
         eps_trail = info.get('trailingEps', 0.0) or 0.0
@@ -321,7 +336,7 @@ def fase5_ml_score(ticker: str, score_mercado: float, score_kpi: float) -> dict:
 def fase6_valuation(ticker: str) -> dict:
     """Fase 6: Valuation por múltiplos + análise de cenários."""
     try:
-        info = yf.Ticker(ticker).info
+        info = get_ticker_info(ticker)
         pl   = info.get('trailingPE')
         pvp  = info.get('priceToBook')
         ev_r = info.get('enterpriseToRevenue')
@@ -472,16 +487,25 @@ def executar_agente(tickers: list, perfil: str, data_inicio: str, data_fim: str,
     resultados = {}
     total = len(tickers)
 
+    # Pré-aquece o cache de info do Yahoo com delay entre tickers
+    # para evitar rate limit antes de iniciar o pipeline
     for i, ticker in enumerate(tickers):
         if progress_bar:
-            progress_bar.progress((i) / total, text=f"Analisando {ticker}…")
+            progress_bar.progress(i / (total * 2), text=f"🔄 Buscando dados: {ticker}…")
+        get_ticker_info(ticker)          # cacheia aqui
+        if i < total - 1:
+            time.sleep(1.5)              # 1.5s entre tickers = safe para Yahoo
+
+    for i, ticker in enumerate(tickers):
+        if progress_bar:
+            progress_bar.progress(0.5 + i / (total * 2), text=f"🤖 Calculando scores: {ticker}…")
 
         dados = {}
 
-        # Fases paralelas
-        dados['mercado']  = fase1_mercado(ticker, data_inicio, data_fim)
-        dados['kpis']     = fase3_kpis_sinteticos(ticker)
-        dados['nlp']      = fase4_nlp_sintetico(ticker)
+        # Fases — info já está em cache, sem novas requisições
+        dados['mercado']   = fase1_mercado(ticker, data_inicio, data_fim)
+        dados['kpis']      = fase3_kpis_sinteticos(ticker)
+        dados['nlp']       = fase4_nlp_sintetico(ticker)
         dados['valuation'] = fase6_valuation(ticker)
 
         s_merc = dados['mercado'].get('score_mercado', 12.5)
